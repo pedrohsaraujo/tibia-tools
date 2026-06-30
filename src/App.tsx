@@ -90,8 +90,8 @@ export default function App() {
       });
   }, []);
 
-  const handleAnalyze = async (overrideWorld?: string) => {
-    const targetWorld = overrideWorld || selectedWorld;
+  const handleAnalyze = async (overrideWorld?: string | unknown) => {
+    const targetWorld = typeof overrideWorld === 'string' ? overrideWorld : selectedWorld;
     if (!lootText.trim()) {
       setError('Por favor, insira o texto de loot antes de analisar.');
       return;
