@@ -148,6 +148,53 @@ const STATIC_FALLBACK_ITEMS: any[] = [
   { id: 11445, name: 'demonic claw', wiki_name: 'Demonic Claw', category: 'Creature Products', npc_buy: [] }
 ];
 
+function cleanTibiaLootText(text: string): string {
+  if (!text) return '';
+  
+  const lowerText = text.toLowerCase();
+  
+  // Caso 1: Se contiver "Looted Items:", extraímos apenas o bloco subsequente
+  const lootedItemsIndex = lowerText.indexOf('looted items:');
+  if (lootedItemsIndex !== -1) {
+    return text.substring(lootedItemsIndex + 'looted items:'.length).trim();
+  }
+  
+  // Caso 2: Se contiver "Killed Monsters:" mas não tiver "Looted Items:",
+  // lemos linha por linha e pulamos a seção de monstros.
+  const lines = text.split(/\r?\n/);
+  const resultLines: string[] = [];
+  let insideKilledMonsters = false;
+  
+  for (let line of lines) {
+    const trimmed = line.trim();
+    const lowerLine = line.toLowerCase();
+    
+    // Detecta início da seção de monstros
+    if (lowerLine.startsWith('killed monsters:')) {
+      insideKilledMonsters = true;
+      continue;
+    }
+    
+    if (insideKilledMonsters) {
+      if (trimmed === '') {
+        insideKilledMonsters = false;
+        continue;
+      }
+      // Se não houver recuo e contiver ":", indica o início de outra seção
+      if (!line.startsWith(' ') && !line.startsWith('\t') && trimmed.includes(':')) {
+        insideKilledMonsters = false;
+      } else {
+        // Ignoramos todas as linhas sob "Killed Monsters"
+        continue;
+      }
+    }
+    
+    resultLines.push(line);
+  }
+  
+  return resultLines.join('\n');
+}
+
 function parseLootTextClientSide(text: string): { name: string; quantity: number }[] {
   const items: { name: string; quantity: number }[] = [];
   
@@ -157,6 +204,9 @@ function parseLootTextClientSide(text: string): { name: string; quantity: number
   for (let line of lines) {
     line = line.trim();
     if (!line) continue;
+    
+    // Remover timestamps do tipo 11:52 ou 11:52:14 do início da linha
+    line = line.replace(/^\d{2}:\d{2}(:\d{2})?\s*/, '');
     
     // Remove prefixes or headers
     let cleanChunk = line.replace(/^(loot|looted items|loot of [^:]+|killed monsters):\s*/i, '').trim();
@@ -202,7 +252,8 @@ function parseLootTextClientSide(text: string): { name: string; quantity: number
 }
 
 async function runClientSideAnalysis(lootText: string, world: string) {
-  const parsedItems = parseLootTextClientSide(lootText);
+  const cleanedText = cleanTibiaLootText(lootText);
+  const parsedItems = parseLootTextClientSide(cleanedText);
   if (parsedItems.length === 0) {
     return {
       npcSales: [],

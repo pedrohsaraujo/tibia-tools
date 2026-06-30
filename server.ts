@@ -159,6 +159,53 @@ app.get('/api/worlds', async (req, res) => {
   }
 });
 
+function cleanTibiaLootText(text: string): string {
+  if (!text) return '';
+  
+  const lowerText = text.toLowerCase();
+  
+  // Caso 1: Se contiver "Looted Items:", extraímos apenas o bloco subsequente
+  const lootedItemsIndex = lowerText.indexOf('looted items:');
+  if (lootedItemsIndex !== -1) {
+    return text.substring(lootedItemsIndex + 'looted items:'.length).trim();
+  }
+  
+  // Caso 2: Se contiver "Killed Monsters:" mas não tiver "Looted Items:",
+  // ou para limpar seções de monstros do Server Log, lemos linha por linha e pulamos a seção de monstros.
+  const lines = text.split(/\r?\n/);
+  const resultLines: string[] = [];
+  let insideKilledMonsters = false;
+  
+  for (let line of lines) {
+    const trimmed = line.trim();
+    const lowerLine = line.toLowerCase();
+    
+    // Detecta início da seção de monstros
+    if (lowerLine.startsWith('killed monsters:')) {
+      insideKilledMonsters = true;
+      continue;
+    }
+    
+    if (insideKilledMonsters) {
+      if (trimmed === '') {
+        insideKilledMonsters = false;
+        continue;
+      }
+      // Se não houver recuo e contiver ":", indica o início de outra seção
+      if (!line.startsWith(' ') && !line.startsWith('\t') && trimmed.includes(':')) {
+        insideKilledMonsters = false;
+      } else {
+        // Ignoramos todas as linhas sob "Killed Monsters"
+        continue;
+      }
+    }
+    
+    resultLines.push(line);
+  }
+  
+  return resultLines.join('\n');
+}
+
 // 2. API: Parse loot text and compute values
 app.post('/api/analyze', async (req, res) => {
   const { lootText, world = 'Celebra' } = req.body;
@@ -168,6 +215,7 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
+    const cleanedLootText = cleanTibiaLootText(lootText);
     console.log(`Starting parsing using Gemini with model gemini-3.5-flash...`);
     const prompt = `Você é um motor especializado em analisar loot do MMORPG Tibia.
 Extraia os itens e suas quantidades do texto fornecido. Esse texto pode ser copiado do "Hunting Analyzer", "Loot" ou do "Server Log".
@@ -179,7 +227,7 @@ Regras de extração:
 
 O texto de loot recebido é:
 """
-${lootText}
+${cleanedLootText}
 """`;
 
     // We request structured JSON array output
