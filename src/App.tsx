@@ -339,33 +339,52 @@ async function runClientSideAnalysis(lootText: string, world: string) {
       monthAverage = marketData.month_average_sell;
     }
 
-    let marketPrice = buyOffer > 0 ? buyOffer : (monthAverage > 0 ? monthAverage : 0);
+    // Establish "marketPrice" for comparison: we prefer the lowest active sell offer (sellOffer) as it represents the current active market price to list, 
+    // followed by monthAverage (historical average sales), and finally buyOffer (instant buy).
+    let marketPrice = 0;
+    if (sellOffer > 0) {
+      marketPrice = sellOffer;
+    } else if (monthAverage > 0) {
+      marketPrice = monthAverage;
+    } else if (buyOffer > 0) {
+      marketPrice = buyOffer;
+    }
 
     if (marketPrice === 0 && hasFamousImbuementName) {
       marketPrice = item.npcPrice > 0 ? item.npcPrice * 3 : 2500;
     }
 
     const isFamous = hasFamousImbuementName;
-    const isMarketPreferable = marketPrice > item.npcPrice && marketPrice > 0;
-    const npcPriceIsZeroButMarketExists = item.npcPrice === 0 && marketPrice > 0;
+    const npcTotalValue = item.quantity * item.npcPrice;
+    const grossMarketValue = item.quantity * marketPrice;
 
-    const belongsToMarket = isFamous || isMarketPreferable || npcPriceIsZeroButMarketExists;
+    // Tibia Market Fee: 2% of total value, min 20 gp, max 1000 gp
+    let marketFee = 0;
+    let netMarketValue = 0;
+    if (marketPrice > 0) {
+      marketFee = Math.min(1000, Math.max(20, Math.floor(grossMarketValue * 0.02)));
+      netMarketValue = grossMarketValue - marketFee;
+    }
+
+    // To be profitable, net market value must exceed the guaranteed NPC sell value
+    const belongsToMarket = (marketPrice > 0) && (netMarketValue > npcTotalValue);
 
     if (belongsToMarket) {
-      const itemVal = marketPrice > 0 ? marketPrice : item.npcPrice;
-      const totalVal = item.quantity * itemVal;
-      totalMarketGold += totalVal;
+      totalMarketGold += netMarketValue;
 
       marketItems.push({
         ...item,
         buyOffer,
         sellOffer,
         monthAverage,
-        suggestedMarketPrice: marketPrice || item.npcPrice,
+        suggestedMarketPrice: marketPrice,
         isFamous,
-        totalValue: totalVal,
+        grossValue: grossMarketValue,
+        marketFee,
+        totalValue: netMarketValue, // Use net value for the total
       });
-    } else {
+    } else if (item.npcPrice > 0) {
+      // Belongs to NPC Sales because NPC value is better or equal, or market is not viable
       const npcName = item.npcName || 'NPC Comum/Geral';
       const totalVal = item.quantity * item.npcPrice;
       totalNpcGold += totalVal;
@@ -386,6 +405,13 @@ async function runClientSideAnalysis(lootText: string, world: string) {
         monthAverage,
       });
       npcSales[npcName].total += totalVal;
+    } else {
+      // npcPrice is 0 and market is not profitable (or net value is negative/zero)
+      unresolved.push({
+        name: item.wikiName || item.name,
+        quantity: item.quantity,
+        reason: `Não compensa vender no Market devido à taxa mínima de 20 gp (Valor bruto: ${grossMarketValue} gp)`,
+      });
     }
   }
 
@@ -562,7 +588,7 @@ export default function App() {
           md += ` | Venda Anunciada: ${item.sellOffer > 0 ? formatNumber(item.sellOffer) + ' gp' : '---'}`;
           md += ` | Média Mensal: ${item.monthAverage > 0 ? formatNumber(item.monthAverage) + ' gp' : '---'}]\n`;
         }
-        md += `  *Total Estimado no Market: ${formatNumber(item.totalValue)} gp*\n`;
+        md += `  * Valor Bruto: ${formatNumber(item.grossValue)} gp | Taxa de Oferta (2%): -${formatNumber(item.marketFee)} gp (Líquido: ${formatNumber(item.totalValue)} gp)\n`;
       });
     } else {
       md += `*(Nenhum item com potencial de market identificado)*\n\n`;
@@ -915,12 +941,19 @@ export default function App() {
                                 <span className="bg-white/5 px-2 py-0.5 rounded text-[10px] font-mono">NPC Value: {formatNumber(item.npcPrice)} GP</span>
                               </div>
                               {(item.buyOffer > 0 || item.sellOffer > 0 || item.monthAverage > 0) && (
-                                <div className="mt-2 text-[10px] text-white/40 font-mono flex flex-wrap gap-x-3 gap-y-1">
+                                <div className="mt-2 text-[10px] text-white/40 font-mono flex flex-wrap gap-x-3 gap-y-1 border-b border-white/5 pb-2">
                                   {item.buyOffer > 0 && <span>Instant Buy: {formatNumber(item.buyOffer)} GP</span>}
                                   {item.sellOffer > 0 && <span>Sell Offer: {formatNumber(item.sellOffer)} GP</span>}
                                   {item.monthAverage > 0 && <span>Month Avg: {formatNumber(item.monthAverage)} GP</span>}
                                 </div>
                               )}
+                              <div className="mt-2 pt-1 flex flex-wrap justify-between items-center text-xs">
+                                <div className="text-white/40 font-mono text-[10px] flex gap-x-3">
+                                  <span>Bruto: {formatNumber(item.grossValue)} GP</span>
+                                  <span className="text-red-400">Taxa (2%): -{formatNumber(item.marketFee)} GP</span>
+                                </div>
+                                <span className="font-mono font-bold text-[#00FF41]">Líquido: {formatNumber(item.totalValue)} GP</span>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -967,17 +1000,24 @@ export default function App() {
                       <div className="bg-white/5 border border-white/10 rounded-2xl p-6 space-y-4">
                         <div className="flex items-center gap-2 text-white/40 text-xs font-black uppercase tracking-[0.2em]">
                           <HelpCircle className="w-4 h-4" />
-                          UNRECOGNIZED / DISCARDABLE ITEMS
+                          UNRECOGNIZED / DISCARDABLE / UNPROFITABLE ITEMS
                         </div>
                         <p className="text-[10px] text-white/40 -mt-2 leading-relaxed font-mono">
-                          Items not listed in TibiaMarket databases or without any relevant NPC buy value.
+                          Itens sem valor comercial nos NPCs ou que não compensam ser anunciados no Market devido às taxas de anúncio de 2% (mínimo de 20 gp).
                         </p>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {result.unresolved.map((item: any, idx: number) => (
-                            <span key={idx} className="bg-black text-white/60 text-[11px] font-bold px-3 py-1.5 rounded-lg border border-white/5 flex items-center gap-1.5">
-                              <span className="font-mono text-white/30">{item.quantity}x</span>
-                              {item.name.toUpperCase()}
-                            </span>
+                            <div key={idx} className="bg-black p-3 rounded-lg border border-white/5 flex flex-col justify-center">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-white/30 text-xs">{item.quantity}x</span>
+                                <span className="text-white/80 font-black text-xs uppercase tracking-tight">{item.name}</span>
+                              </div>
+                              {item.reason && (
+                                <div className="text-[10px] text-red-400 mt-1 font-medium italic">
+                                  {item.reason}
+                                </div>
+                              )}
+                            </div>
                           ))}
                         </div>
                       </div>

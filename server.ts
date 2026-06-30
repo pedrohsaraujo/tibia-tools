@@ -344,35 +344,53 @@ ${lootText}
         monthAverage = marketData.month_average_sell;
       }
 
-      // Establish "marketPrice" for comparison: buy_offer (instant sell) or monthAverage
-      const marketPrice = buyOffer > 0 ? buyOffer : (monthAverage > 0 ? monthAverage : 0);
+      // Establish "marketPrice" for comparison: we prefer the lowest active sell offer (sellOffer) as it represents the current active market price to list, 
+      // followed by monthAverage (historical average sales), and finally buyOffer (instant buy).
+      let marketPrice = 0;
+      if (sellOffer > 0) {
+        marketPrice = sellOffer;
+      } else if (monthAverage > 0) {
+        marketPrice = monthAverage;
+      } else if (buyOffer > 0) {
+        marketPrice = buyOffer;
+      }
 
-      // Rule of thumb for "Potencial de Market":
-      // 1. Explicitly in the famous list, or
-      // 2. Market price is higher than NPC price, and has market data, or
-      // 3. Creature Product category that has solid market data superior to NPC price
+      // Famous fallback
+      if (marketPrice === 0 && hasFamousImbuementName) {
+        marketPrice = item.npcPrice > 0 ? item.npcPrice * 3 : 2500;
+      }
+
       const isFamous = hasFamousImbuementName;
-      const isMarketPreferable = marketPrice > item.npcPrice && marketPrice > 0;
-      const npcPriceIsZeroButMarketExists = item.npcPrice === 0 && marketPrice > 0;
+      const npcTotalValue = item.quantity * item.npcPrice;
+      const grossMarketValue = item.quantity * marketPrice;
 
-      const belongsToMarket = isFamous || isMarketPreferable || npcPriceIsZeroButMarketExists;
+      // Tibia Market Fee: 2% of total value, min 20 gp, max 1000 gp
+      let marketFee = 0;
+      let netMarketValue = 0;
+      if (marketPrice > 0) {
+        marketFee = Math.min(1000, Math.max(20, Math.floor(grossMarketValue * 0.02)));
+        netMarketValue = grossMarketValue - marketFee;
+      }
+
+      // To be profitable, net market value must exceed the guaranteed NPC sell value
+      const belongsToMarket = (marketPrice > 0) && (netMarketValue > npcTotalValue);
 
       if (belongsToMarket) {
-        const itemVal = marketPrice > 0 ? marketPrice : item.npcPrice;
-        const totalVal = item.quantity * itemVal;
-        totalMarketGold += totalVal;
+        totalMarketGold += netMarketValue;
 
         marketItems.push({
           ...item,
           buyOffer,
           sellOffer,
           monthAverage,
-          suggestedMarketPrice: marketPrice || item.npcPrice,
+          suggestedMarketPrice: marketPrice,
           isFamous,
-          totalValue: totalVal,
+          grossValue: grossMarketValue,
+          marketFee,
+          totalValue: netMarketValue, // Use net value for the total
         });
-      } else {
-        // Belongs to NPC Sales
+      } else if (item.npcPrice > 0) {
+        // Belongs to NPC Sales because NPC value is better or equal, or market is not viable
         const npcName = item.npcName || 'NPC Comum/Geral';
         const totalVal = item.quantity * item.npcPrice;
         totalNpcGold += totalVal;
@@ -393,6 +411,13 @@ ${lootText}
           monthAverage,
         });
         npcSales[npcName].total += totalVal;
+      } else {
+        // npcPrice is 0 and market is not profitable (or net value is negative/zero)
+        unresolved.push({
+          name: item.wikiName || item.name,
+          quantity: item.quantity,
+          reason: `Não compensa vender no Market devido à taxa mínima de 20 gp (Valor bruto: ${grossMarketValue} gp)`,
+        });
       }
     }
 
