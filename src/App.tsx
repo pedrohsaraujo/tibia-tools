@@ -90,7 +90,8 @@ export default function App() {
       });
   }, []);
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = async (overrideWorld?: string) => {
+    const targetWorld = overrideWorld || selectedWorld;
     if (!lootText.trim()) {
       setError('Por favor, insira o texto de loot antes de analisar.');
       return;
@@ -106,7 +107,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           lootText,
-          world: selectedWorld,
+          world: targetWorld,
         }),
       });
 
@@ -259,7 +260,13 @@ export default function App() {
                   <select
                     className="w-full bg-black/80 border border-white/10 rounded-xl px-4 py-3 text-white font-black tracking-wide uppercase focus:outline-none focus:ring-2 focus:ring-white/20 appearance-none cursor-pointer transition text-sm"
                     value={selectedWorld}
-                    onChange={(e) => setSelectedWorld(e.target.value)}
+                    onChange={(e) => {
+                      const newWorld = e.target.value;
+                      setSelectedWorld(newWorld);
+                      if (lootText.trim()) {
+                        handleAnalyze(newWorld);
+                      }
+                    }}
                   >
                     {worlds.length === 0 ? (
                       <option>Loading worlds...</option>
