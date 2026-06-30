@@ -58,6 +58,351 @@ Looted items:
   }
 ];
 
+// Local cache of metadata to avoid refetching on every client-side analyze call
+let clientItemMetadataCache: any[] | null = null;
+
+// Famous Imbuement / Addon items that have higher Market value
+const FAMOUS_MARKET_ITEMS = new Set([
+  'rope belt',
+  'protective charm',
+  'sabretooth',
+  'silencer claw',
+  'vampire teeth',
+  'piece of dead brain',
+  'cultish mask',
+  'thick fur',
+  'bloody pincers',
+  'flask of embalming fluid',
+  'glooth bag',
+  'snake skin',
+  'turtle shell',
+  'green dragon scale',
+  'hardened bone',
+  'holy orchid',
+  'gland',
+  'little bowl of myrrh',
+  'damaged logbook',
+  'mooh\'tah shell',
+  'peat',
+  'petrol',
+  'piles of grave earth',
+  'poisonous slime',
+  'searing fire',
+  'shadow herb',
+  'slime',
+  'winter wolf fur',
+  'spider silk',
+  'brimstone fangs',
+  'broken shamanic staff',
+  'orclops hair',
+  'elven scouting glass',
+  'demon horn',
+  'metal spike',
+  'strand of lich hair',
+  'voodoo doll',
+  'waspoid wing',
+  'crawler head plating',
+  'broken gladiator shield',
+  'bunch of winterberries',
+  'lion mane',
+  'leech',
+  'sombre eye',
+  'vile grandmaster\'s ribbon',
+  'broken drakinar'
+]);
+
+// Helper to check if a name is a pure coin
+function getCoinValue(name: string): number | null {
+  const n = name.toLowerCase();
+  if (n.includes('crystal coin')) return 10000;
+  if (n.includes('platinum coin')) return 100;
+  if (n.includes('gold coin')) return 1;
+  return null;
+}
+
+// Static Fallback Database of common Tibia hunt loot items (if API is unreachable / CORS blocked)
+const STATIC_FALLBACK_ITEMS: any[] = [
+  { id: 3043, name: 'crystal coin', wiki_name: 'Crystal Coin', category: 'Others', npc_buy: [] },
+  { id: 3010, name: 'platinum coin', wiki_name: 'Platinum Coin', category: 'Others', npc_buy: [] },
+  { id: 3012, name: 'gold coin', wiki_name: 'Gold Coin', category: 'Others', npc_buy: [] },
+  { id: 11447, name: 'rope belt', wiki_name: 'Rope Belt', category: 'Creature Products', npc_buy: [] },
+  { id: 10454, name: 'cultish mask', wiki_name: 'Cultish Mask', category: 'Creature Products', npc_buy: [] },
+  { id: 11452, name: 'mystical feather', wiki_name: 'Mystical Feather', category: 'Creature Products', npc_buy: [] },
+  { id: 3407, name: 'giant sword', wiki_name: 'Giant Sword', category: 'Weapons', npc_buy: [{ name: 'Haroun', price: 17000, location: 'Blue Djinn Fortress' }] },
+  { id: 10438, name: 'vampire teeth', wiki_name: 'Vampire Teeth', category: 'Creature Products', npc_buy: [] },
+  { id: 10431, name: 'sabretooth', wiki_name: 'Sabretooth', category: 'Creature Products', npc_buy: [] },
+  { id: 11443, name: 'protective charm', wiki_name: 'Protective Charm', category: 'Creature Products', npc_buy: [] },
+  { id: 20112, name: 'silencer claw', wiki_name: 'Silencer Claw', category: 'Creature Products', npc_buy: [] },
+  { id: 3432, name: 'mastermind shield', wiki_name: 'Mastermind Shield', category: 'Shields', npc_buy: [{ name: 'Blue Djinn', price: 25000, location: 'Blue Djinn Fortress' }, { name: 'Nah\'Bob', price: 25000, location: 'Blue Djinn Fortress' }] },
+  { id: 3554, name: 'steel boots', wiki_name: 'Steel Boots', category: 'Armor', npc_buy: [{ name: 'Green Djinn', price: 30000, location: 'Green Djinn Fortress' }, { name: 'Haroun', price: 30000, location: 'Green Djinn Fortress' }] },
+  { id: 3392, name: 'royal helmet', wiki_name: 'Royal Helmet', category: 'Armor', npc_buy: [{ name: 'Rashid', price: 30000, location: 'Travelling NPC' }] },
+  { id: 3079, name: 'boots of haste', wiki_name: 'Boots of Haste', category: 'Armor', npc_buy: [{ name: 'Rashid', price: 30000, location: 'Travelling NPC' }] },
+  { id: 3381, name: 'crown armor', wiki_name: 'Crown Armor', category: 'Armor', npc_buy: [{ name: 'Blue Djinn', price: 12000, location: 'Blue Djinn Fortress' }] },
+  { id: 3419, name: 'crown shield', wiki_name: 'Crown Shield', category: 'Shields', npc_buy: [{ name: 'Blue Djinn', price: 8000, location: 'Blue Djinn Fortress' }] },
+  { id: 3421, name: 'medusa shield', wiki_name: 'Medusa Shield', category: 'Shields', npc_buy: [{ name: 'Blue Djinn', price: 9000, location: 'Blue Djinn Fortress' }] },
+  { id: 3416, name: 'dragon shield', wiki_name: 'Dragon Shield', category: 'Shields', npc_buy: [{ name: 'Haroun', price: 4000, location: 'Blue Djinn Fortress' }] },
+  { id: 11446, name: 'thick fur', wiki_name: 'Thick Fur', category: 'Creature Products', npc_buy: [] },
+  { id: 11451, name: 'holy orchid', wiki_name: 'Holy Orchid', category: 'Creature Products', npc_buy: [] },
+  { id: 11454, name: 'shadow herb', wiki_name: 'Shadow Herb', category: 'Creature Products', npc_buy: [] },
+  { id: 21183, name: 'peat', wiki_name: 'Peat', category: 'Creature Products', npc_buy: [] },
+  { id: 11445, name: 'demonic claw', wiki_name: 'Demonic Claw', category: 'Creature Products', npc_buy: [] }
+];
+
+function parseLootTextClientSide(text: string): { name: string; quantity: number }[] {
+  const items: { name: string; quantity: number }[] = [];
+  
+  // Clean text and split by newlines or commas
+  const lines = text.split(/\r?\n|,/);
+  
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+    
+    // Remove prefixes or headers
+    let cleanChunk = line.replace(/^(loot|looted items|loot of [^:]+|killed monsters):\s*/i, '').trim();
+    const lowerLine = cleanChunk.toLowerCase();
+    
+    if (
+      lowerLine.startsWith('session data') ||
+      lowerLine.startsWith('session:') ||
+      lowerLine.startsWith('loot type:') ||
+      lowerLine.startsWith('loot:') ||
+      lowerLine.startsWith('supplies:') ||
+      lowerLine.startsWith('balance:') ||
+      lowerLine.startsWith('damage:') ||
+      lowerLine.startsWith('healing:') ||
+      lowerLine.startsWith('killed monsters:') ||
+      lowerLine.startsWith('looted items:')
+    ) {
+      continue;
+    }
+    
+    // Regex 1: "12x rope belt" or "12 rope belt"
+    const matchQty = cleanChunk.match(/^[\s\-\*]*(\d+)\s*x?\s+([a-zA-Z'\s\-]+)$/);
+    if (matchQty) {
+      const qty = parseInt(matchQty[1], 10);
+      let name = matchQty[2].trim().toLowerCase();
+      name = name.replace(/^(a|an|some)\s+/, '');
+      items.push({ name, quantity: qty });
+      continue;
+    }
+    
+    // Regex 2: "rope belt" (no explicit quantity, default to 1)
+    const matchSingle = cleanChunk.match(/^[\s\-\*]*([a-zA-Z'\s\-]+)$/);
+    if (matchSingle) {
+      let name = matchSingle[1].trim().toLowerCase();
+      name = name.replace(/^(a|an|some)\s+/, '');
+      if (name && name !== 'loot' && name !== 'looted items') {
+        items.push({ name, quantity: 1 });
+      }
+    }
+  }
+  
+  return items;
+}
+
+async function runClientSideAnalysis(lootText: string, world: string) {
+  const parsedItems = parseLootTextClientSide(lootText);
+  if (parsedItems.length === 0) {
+    return {
+      npcSales: [],
+      marketItems: [],
+      coins: [],
+      unresolved: [],
+      totalNpcGold: 0,
+      totalMarketGold: 0,
+      totalPureCoinsGold: 0,
+      grandTotal: 0,
+    };
+  }
+
+  let metadata = clientItemMetadataCache;
+  if (!metadata) {
+    try {
+      console.log('Client-side Fallback: Loading Tibia metadata from public API...');
+      const response = await fetch('https://api.tibiamarket.top/item_metadata');
+      if (response.ok) {
+        metadata = await response.json();
+        clientItemMetadataCache = metadata;
+      }
+    } catch (e) {
+      console.warn('Client-side Fallback: Failed to fetch metadata from public API (CORS/Network). Using static fallback.');
+    }
+  }
+
+  if (!metadata) {
+    metadata = STATIC_FALLBACK_ITEMS;
+  }
+
+  const mappedItems: any[] = [];
+  const coinsList: any[] = [];
+  const unresolved: any[] = [];
+
+  for (const item of parsedItems) {
+    const coinValue = getCoinValue(item.name);
+    if (coinValue !== null) {
+      coinsList.push({
+        name: item.name,
+        quantity: item.quantity,
+        valueEach: coinValue,
+        totalValue: item.quantity * coinValue,
+      });
+      continue;
+    }
+
+    const cleanName = item.name.toLowerCase().trim();
+    let match = metadata.find((m: any) => m.name && m.name.toLowerCase() === cleanName);
+    
+    // Fallbacks
+    if (!match && cleanName.endsWith('s')) {
+      const sing = cleanName.slice(0, -1);
+      match = metadata.find((m: any) => m.name && m.name.toLowerCase() === sing);
+    }
+    if (!match) {
+      match = metadata.find((m: any) => m.name && m.name.toLowerCase() === cleanName + 's');
+    }
+    if (!match) {
+      match = metadata.find((m: any) => m.name && m.name.toLowerCase().includes(cleanName));
+    }
+    if (!match) {
+      match = metadata.find((m: any) => m.wiki_name && m.wiki_name.toLowerCase().includes(cleanName));
+    }
+
+    if (match) {
+      let npcPrice = 0;
+      let npcName = 'Nenhum';
+      let npcLocation = '';
+
+      if (Array.isArray(match.npc_buy) && match.npc_buy.length > 0) {
+        const sortedNpcs = [...match.npc_buy].sort((a: any, b: any) => b.price - a.price);
+        npcPrice = sortedNpcs[0].price;
+        npcName = sortedNpcs[0].name;
+        npcLocation = sortedNpcs[0].location || '';
+      }
+
+      mappedItems.push({
+        id: match.id,
+        name: match.name || item.name,
+        wikiName: match.wiki_name || match.name || item.name,
+        category: match.category || 'Others',
+        quantity: item.quantity,
+        npcPrice,
+        npcName,
+        npcLocation,
+      });
+    } else {
+      unresolved.push({
+        name: item.name,
+        quantity: item.quantity,
+      });
+    }
+  }
+
+  const matchedIds = mappedItems.map((item) => item.id);
+  const marketMap = new Map<number, any>();
+
+  if (matchedIds.length > 0) {
+    try {
+      const marketUrl = `https://api.tibiamarket.top/market_values?server=${encodeURIComponent(world)}&item_ids=${matchedIds.join(',')}`;
+      console.log(`Client-side Fallback: Fetching market prices for server ${world}...`);
+      const mRes = await fetch(marketUrl);
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        if (Array.isArray(mData)) {
+          mData.forEach((val: any) => {
+            marketMap.set(val.id, val);
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Client-side Fallback: Failed to fetch market values from API.');
+    }
+  }
+
+  const npcSales: { [npcName: string]: { npc: string; items: any[]; total: number } } = {};
+  const marketItems: any[] = [];
+
+  let totalNpcGold = 0;
+  let totalMarketGold = 0;
+
+  for (const item of mappedItems) {
+    const marketData = marketMap.get(item.id);
+    const hasFamousImbuementName = FAMOUS_MARKET_ITEMS.has(item.name.toLowerCase().trim()) || FAMOUS_MARKET_ITEMS.has(item.wikiName.toLowerCase().trim());
+    
+    let buyOffer = -1;
+    let sellOffer = -1;
+    let monthAverage = -1;
+
+    if (marketData) {
+      buyOffer = marketData.buy_offer;
+      sellOffer = marketData.sell_offer;
+      monthAverage = marketData.month_average_sell;
+    }
+
+    let marketPrice = buyOffer > 0 ? buyOffer : (monthAverage > 0 ? monthAverage : 0);
+
+    if (marketPrice === 0 && hasFamousImbuementName) {
+      marketPrice = item.npcPrice > 0 ? item.npcPrice * 3 : 2500;
+    }
+
+    const isFamous = hasFamousImbuementName;
+    const isMarketPreferable = marketPrice > item.npcPrice && marketPrice > 0;
+    const npcPriceIsZeroButMarketExists = item.npcPrice === 0 && marketPrice > 0;
+
+    const belongsToMarket = isFamous || isMarketPreferable || npcPriceIsZeroButMarketExists;
+
+    if (belongsToMarket) {
+      const itemVal = marketPrice > 0 ? marketPrice : item.npcPrice;
+      const totalVal = item.quantity * itemVal;
+      totalMarketGold += totalVal;
+
+      marketItems.push({
+        ...item,
+        buyOffer,
+        sellOffer,
+        monthAverage,
+        suggestedMarketPrice: marketPrice || item.npcPrice,
+        isFamous,
+        totalValue: totalVal,
+      });
+    } else {
+      const npcName = item.npcName || 'NPC Comum/Geral';
+      const totalVal = item.quantity * item.npcPrice;
+      totalNpcGold += totalVal;
+
+      if (!npcSales[npcName]) {
+        npcSales[npcName] = {
+          npc: npcName,
+          items: [],
+          total: 0,
+        };
+      }
+
+      npcSales[npcName].items.push({
+        ...item,
+        totalValue: totalVal,
+        buyOffer,
+        sellOffer,
+        monthAverage,
+      });
+      npcSales[npcName].total += totalVal;
+    }
+  }
+
+  const totalPureCoinsGold = coinsList.reduce((sum, c) => sum + c.totalValue, 0);
+
+  return {
+    npcSales: Object.values(npcSales).sort((a: any, b: any) => b.total - a.total),
+    marketItems: marketItems.sort((a: any, b: any) => b.totalValue - a.totalValue),
+    coins: coinsList,
+    unresolved,
+    totalNpcGold,
+    totalMarketGold,
+    totalPureCoinsGold,
+    grandTotal: totalNpcGold + totalMarketGold + totalPureCoinsGold,
+  };
+}
+
 export default function App() {
   const [worlds, setWorlds] = useState<string[]>([]);
   const [selectedWorld, setSelectedWorld] = useState('Celebra');
@@ -67,15 +412,21 @@ export default function App() {
   const [result, setResult] = useState<any>(null);
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'visual' | 'markdown'>('visual');
+  const [isClientSideParsed, setIsClientSideParsed] = useState(false);
 
   // Load Tibia Worlds on mount
   useEffect(() => {
     fetch('/api/worlds')
-      .then((res) => res.json())
+      .then((res) => {
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Response is not JSON');
+        }
+        return res.json();
+      })
       .then((data) => {
         if (data.worlds && Array.isArray(data.worlds)) {
           setWorlds(data.worlds);
-          // Set to Celebra if available, otherwise first world
           if (data.worlds.includes('Celebra')) {
             setSelectedWorld('Celebra');
           } else if (data.worlds.length > 0) {
@@ -84,9 +435,31 @@ export default function App() {
         }
       })
       .catch((err) => {
-        console.error('Error loading worlds:', err);
-        // Fallback list
-        setWorlds(['Celebra', 'Antica', 'Secura', 'Gentebra', 'Bona', 'Belobra', 'Inabra']);
+        console.warn('Backend worlds API unavailable. Trying direct public world list fetch...', err);
+        fetch('https://api.tibiamarket.top/world_data')
+          .then((res) => res.json())
+          .then((data) => {
+            if (Array.isArray(data)) {
+              const servers = data
+                .map((item) => item.server)
+                .filter((s): s is string => typeof s === 'string' && s.length > 0);
+              const uniqueServers = Array.from(new Set(servers)).sort();
+              if (uniqueServers.length > 0) {
+                setWorlds(uniqueServers);
+                if (uniqueServers.includes('Celebra')) {
+                  setSelectedWorld('Celebra');
+                } else {
+                  setSelectedWorld(uniqueServers[0]);
+                }
+                return;
+              }
+            }
+            throw new Error('Invalid public world format');
+          })
+          .catch((publicErr) => {
+            console.error('All world lists failed. Using hardcoded backup:', publicErr);
+            setWorlds(['Celebra', 'Antica', 'Secura', 'Gentebra', 'Bona', 'Belobra', 'Inabra', 'Luminera', 'Monza', 'Nefera', 'Pacera', 'Quelibra']);
+          });
       });
   }, []);
 
@@ -100,6 +473,7 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setIsClientSideParsed(false);
 
     try {
       const response = await fetch('/api/analyze', {
@@ -111,6 +485,15 @@ export default function App() {
         }),
       });
 
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.warn('Backend returned non-JSON response. Activating client-side fallback engine...');
+        const clientResult = await runClientSideAnalysis(lootText, targetWorld);
+        setResult(clientResult);
+        setIsClientSideParsed(true);
+        return;
+      }
+
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Ocorreu um erro ao processar o loot.');
@@ -118,7 +501,14 @@ export default function App() {
 
       setResult(data.summary);
     } catch (err: any) {
-      setError(err.message || 'Erro de conexão com o servidor.');
+      console.warn('Backend query failed. Activating client-side fallback engine...', err);
+      try {
+        const clientResult = await runClientSideAnalysis(lootText, targetWorld);
+        setResult(clientResult);
+        setIsClientSideParsed(true);
+      } catch (fallbackErr: any) {
+        setError(fallbackErr.message || 'Erro de conexão com o servidor.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -392,6 +782,16 @@ export default function App() {
 
             {result && !isLoading && (
               <div className="space-y-6">
+                
+                {isClientSideParsed && (
+                  <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 flex items-start gap-3">
+                    <Sparkles className="w-5 h-5 text-yellow-500 shrink-0 mt-0.5" />
+                    <div className="text-xs text-yellow-400">
+                      <strong className="font-bold uppercase tracking-wider block mb-0.5">Motor de Backup Client-Side Ativo</strong>
+                      Este loot foi processado localmente no seu navegador porque o servidor de IA retornou uma resposta não-JSON ou está indisponível. Preços e NPCs foram sincronizados com base na API direta do Tibia Market!
+                    </div>
+                  </div>
+                )}
                 
                 {/* 1. Totals Dashboard */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" id="dashboard">
