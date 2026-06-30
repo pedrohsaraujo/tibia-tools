@@ -1,0 +1,6 @@
+{
+  "name": "Tibia Loot Analyzer",
+  "description": "Um analisador inteligente de loot para o Tibia que separa itens em grupos de venda por NPC e Market, consultando preços reais.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
